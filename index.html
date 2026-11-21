@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>StockPlus POS &amp; ARCA — Offline-First</title>
+  <title>StockPlus POS &amp; ARCA — Realtime + Offline-First</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -23,7 +23,7 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
-      padding-bottom: 72px;
+      padding-bottom: 76px;
     }
     header {
       position: sticky;
@@ -144,10 +144,11 @@
   <header>
     <div>
       <div class="brand">StockPlus POS</div>
-      <div class="muted" id="syncInfo">LocalStorage listo</div>
+      <div class="muted" id="syncInfo">Iniciando local + Firestore (stockplus-20xx)...</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;">
-      <span class="badge off" id="netBadge">Offline</span>
+      <span class="badge off" id="netBadge">Conectando</span>
+      <button type="button" class="ghost" onclick="forceSyncAll()">Sync</button>
       <button type="button" class="ghost" onclick="exportBackup()">JSON</button>
     </div>
   </header>
@@ -289,26 +290,214 @@
     <button type="button" id="nav-sales" onclick="switchTab('sales')">Ventas</button>
   </nav>
 
-  <script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      doc,
+      setDoc,
+      onSnapshot
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBBbUY1R0Y4iGEOb-h62bn9o1q-UEPwoHw",
+      authDomain: "stockplus-20xx.firebaseapp.com",
+      projectId: "stockplus-20xx",
+      storageBucket: "stockplus-20xx.firebasestorage.app",
+      messagingSenderId: "700683308734",
+      appId: "1:700683308734:web:b743025522a3dfd1bd18ef",
+      measurementId: "G-DZJ6H1B735"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
     const KEYS = {
+      products: 'sp_v2_products',
+      customers: 'sp_v2_customers',
+      sales: 'sp_v2_sales',
+      queue: 'sp_v2_pending_sync'
+    };
+
+    window.state = {
+      products: JSON.parse(localStorage.getItem(KEYS.products) || '[]'),
+      customers: JSON.parse(localStorage.getItem(KEYS.customers) || '[]'),
+      sales: JSON.parse(localStorage.getItem(KEYS.sales) || '[]'),
+      queue: JSON.parse(localStorage.getItem(KEYS.queue) || '[]'),
+      cart: []
+    };
+
+    let firestoreReady = false;
+
+    function saveQueue() {
+      localStorage.setItem(KEYS.queue, JSON.stringify(window.state.queue));
+    }
+
+    function enqueueCloudWrite(colName, docId, payload) {
+      const idx = window.state.queue.findIndex(q => q.colName === colName && q.docId === docId);
+      const entry = { colName, docId, payload, queuedAt: Date.now() };
+      if (idx >= 0) window.state.queue[idx] = entry;
+      else window.state.queue.push(entry);
+      saveQueue();
+      flushCloudQueue();
+    }
+
+    async function flushCloudQueue() {
+      if (!navigator.onLine || !window.state.queue.length) {
+        updateSyncStatus();
+        return;
+      }
+      const remaining = [];
+      for (const item of window.state.queue) {
+        try {
+          await setDoc(doc(db, item.colName, item.docId), item.payload, { merge: true });
+          firestoreReady = true;
+        } catch (err) {
+          console.warn('Error sincronizando con Firestore:', err.message);
+          remaining.push(item);
+        }
+      }
+      window.state.queue = remaining;
+      saveQueue();
+      updateSyncStatus();
+    }
+
+    function updateSyncStatus() {
+      const badge = document.getElementById('netBadge');
+      const info = document.getElementById('syncInfo');
+      const pending = window.state.queue.length;
+
+      if (navigator.onLine && firestoreReady && pending === 0) {
+        badge.textContent = 'Firestore Live';
+        badge.className = 'badge ok';
+        info.textContent = 'Sincronizado con stockplus-20xx • ' + new Date().toLocaleTimeString();
+      } else if (navigator.onLine && pending > 0) {
+        badge.textContent = `Pendientes (${pending})`;
+        badge.className = 'badge off';
+        info.textContent = `Guardado local ✓ • ${pending} cambio(s) por subir`;
+      } else if (navigator.onLine) {
+        badge.textContent = 'Online';
+        badge.className = 'badge ok';
+        info.textContent = 'LocalStorage listo • Conectado a red';
+      } else {
+        badge.textContent = 'Offline';
+        badge.className = 'badge off';
+        info.textContent = `Modo Offline (${pending} pendiente(s))`;
+      }
+    }
+
+    window.syncDocumentToCloud = function(colName, docId, payload) {
+      enqueueCloudWrite(colName, docId, payload);
+    };
+
+    window.forceSyncAll = async function() {
+      for (const p of window.state.products) {
+        enqueueCloudWrite('products', p.id, p);
+      }
+      for (const c of window.state.customers) {
+        enqueueCloudWrite('customers', c.id, c);
+      }
+      for (const s of window.state.sales) {
+        enqueueCloudWrite('sales', s.id, s);
+      }
+      await flushCloudQueue();
+      window.showToast('Sincronización con stockplus-20xx ejecutada');
+    };
+
+    // Listeners en tiempo real desde Firestore (stockplus-20xx)
+    onSnapshot(collection(db, 'products'), (snap) => {
+      firestoreReady = true;
+      const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (remote.length || window.state.queue.length === 0) {
+        const byId = new Map();
+        window.state.products.forEach(p => byId.set(p.id, p));
+        remote.forEach(p => byId.set(p.id, { ...byId.get(p.id), ...p }));
+        window.state.products = Array.from(byId.values());
+        localStorage.setItem(KEYS.products, JSON.stringify(window.state.products));
+        window.renderAll();
+      }
+      updateSyncStatus();
+    }, (err) => {
+      console.warn('Listener products:', err.message);
+      updateSyncStatus();
+    });
+
+    onSnapshot(collection(db, 'customers'), (snap) => {
+      firestoreReady = true;
+      const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (remote.length || window.state.queue.length === 0) {
+        const byId = new Map();
+        window.state.customers.forEach(c => byId.set(c.id, c));
+        remote.forEach(c => byId.set(c.id, { ...byId.get(c.id), ...c }));
+        window.state.customers = Array.from(byId.values());
+        localStorage.setItem(KEYS.customers, JSON.stringify(window.state.customers));
+        window.renderAll();
+      }
+      updateSyncStatus();
+    }, (err) => {
+      console.warn('Listener customers:', err.message);
+      updateSyncStatus();
+    });
+
+    onSnapshot(collection(db, 'sales'), (snap) => {
+      firestoreReady = true;
+      const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (remote.length || window.state.queue.length === 0) {
+        const byId = new Map();
+        window.state.sales.forEach(s => byId.set(s.id, s));
+        remote.forEach(s => byId.set(s.id, { ...byId.get(s.id), ...s }));
+        window.state.sales = Array.from(byId.values()).sort((a, b) =>
+          String(b.id).localeCompare(String(a.id))
+        );
+        localStorage.setItem(KEYS.sales, JSON.stringify(window.state.sales));
+        window.renderAll();
+      }
+      updateSyncStatus();
+    }, (err) => {
+      console.warn('Listener sales:', err.message);
+      updateSyncStatus();
+    });
+
+    window.addEventListener('online', () => {
+      updateSyncStatus();
+      flushCloudQueue();
+    });
+    window.addEventListener('offline', updateSyncStatus);
+
+    updateSyncStatus();
+    flushCloudQueue();
+  </script>
+
+  <script>
+    const KEYS_LOCAL = {
       products: 'sp_v2_products',
       customers: 'sp_v2_customers',
       sales: 'sp_v2_sales'
     };
 
-    let state = {
-      products: JSON.parse(localStorage.getItem(KEYS.products) || '[]'),
-      customers: JSON.parse(localStorage.getItem(KEYS.customers) || '[]'),
-      sales: JSON.parse(localStorage.getItem(KEYS.sales) || '[]'),
-      cart: []
-    };
+    if (!window.state) {
+      window.state = {
+        products: JSON.parse(localStorage.getItem(KEYS_LOCAL.products) || '[]'),
+        customers: JSON.parse(localStorage.getItem(KEYS_LOCAL.customers) || '[]'),
+        sales: JSON.parse(localStorage.getItem(KEYS_LOCAL.sales) || '[]'),
+        cart: []
+      };
+    }
 
-    function persist() {
-      localStorage.setItem(KEYS.products, JSON.stringify(state.products));
-      localStorage.setItem(KEYS.customers, JSON.stringify(state.customers));
-      localStorage.setItem(KEYS.sales, JSON.stringify(state.sales));
+    function persist(changed = {}) {
+      localStorage.setItem(KEYS_LOCAL.products, JSON.stringify(window.state.products));
+      localStorage.setItem(KEYS_LOCAL.customers, JSON.stringify(window.state.customers));
+      localStorage.setItem(KEYS_LOCAL.sales, JSON.stringify(window.state.sales));
+
+      if (typeof window.syncDocumentToCloud === 'function') {
+        (changed.products || []).forEach(p => window.syncDocumentToCloud('products', p.id, p));
+        (changed.customers || []).forEach(c => window.syncDocumentToCloud('customers', c.id, c));
+        (changed.sales || []).forEach(s => window.syncDocumentToCloud('sales', s.id, s));
+      }
+
       document.getElementById('syncInfo').textContent =
-        'Guardado local ✓ • ' + new Date().toLocaleTimeString();
+        'Guardado local ✓ • Sincronizando stockplus-20xx...';
     }
 
     function showToast(msg) {
@@ -318,20 +507,7 @@
       clearTimeout(window._toastTimer);
       window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 2600);
     }
-
-    function updateNetBadge() {
-      const badge = document.getElementById('netBadge');
-      if (navigator.onLine) {
-        badge.textContent = 'Online';
-        badge.className = 'badge ok';
-      } else {
-        badge.textContent = 'Offline';
-        badge.className = 'badge off';
-      }
-    }
-
-    window.addEventListener('online', updateNetBadge);
-    window.addEventListener('offline', updateNetBadge);
+    window.showToast = showToast;
 
     function switchTab(tab) {
       ['pos', 'products', 'customers', 'sales'].forEach(t => {
@@ -353,19 +529,26 @@
         return;
       }
 
-      const item = { id, name, sku, price, stock: isNaN(stock) ? 0 : stock };
-      const idx = state.products.findIndex(p => p.id === id);
-      if (idx >= 0) state.products[idx] = item;
-      else state.products.unshift(item);
+      const item = {
+        id,
+        name,
+        sku,
+        price,
+        stock: isNaN(stock) ? 0 : stock,
+        updatedAt: new Date().toISOString()
+      };
+      const idx = window.state.products.findIndex(p => p.id === id);
+      if (idx >= 0) window.state.products[idx] = item;
+      else window.state.products.unshift(item);
 
-      persist();
+      persist({ products: [item] });
       resetProductForm();
       renderAll();
-      showToast('Producto guardado: ' + name);
+      showToast('Producto guardado y enviado a Firestore: ' + name);
     }
 
     function editProduct(id) {
-      const p = state.products.find(x => x.id === id);
+      const p = window.state.products.find(x => x.id === id);
       if (!p) return;
       document.getElementById('prodId').value = p.id;
       document.getElementById('prodName').value = p.name;
@@ -383,7 +566,7 @@
 
     function saveCustomer() {
       const name = document.getElementById('custName').value.trim();
-      const doc = document.getElementById('custDoc').value.trim();
+      const docNum = document.getElementById('custDoc').value.trim();
       const phone = document.getElementById('custPhone').value.replace(/\D/g, '');
       const limit = parseFloat(document.getElementById('custLimit').value || '0');
 
@@ -392,36 +575,38 @@
         return;
       }
 
-      state.customers.unshift({
+      const cust = {
         id: 'c_' + Date.now(),
         name,
-        doc,
+        doc: docNum,
         phone,
         creditLimit: isNaN(limit) ? 0 : limit,
-        balance: 0
-      });
+        balance: 0,
+        updatedAt: new Date().toISOString()
+      };
 
-      persist();
+      window.state.customers.unshift(cust);
+      persist({ customers: [cust] });
       ['custName', 'custDoc', 'custPhone', 'custLimit'].forEach(id => {
         document.getElementById(id).value = '';
       });
       renderAll();
-      showToast('Cliente guardado: ' + name);
+      showToast('Cliente guardado y enviado a Firestore: ' + name);
     }
 
     function addToCart(prodId) {
-      const prod = state.products.find(p => p.id === prodId);
+      const prod = window.state.products.find(p => p.id === prodId);
       if (!prod) return;
-      const existing = state.cart.find(i => i.productId === prodId);
+      const existing = window.state.cart.find(i => i.productId === prodId);
       if (existing) existing.qty += 1;
-      else state.cart.push({ productId: prod.id, name: prod.name, price: prod.price, qty: 1 });
+      else window.state.cart.push({ productId: prod.id, name: prod.name, price: prod.price, qty: 1 });
       renderCart();
     }
 
     function addBySku() {
       const sku = document.getElementById('skuQuick').value.trim();
       if (!sku) return;
-      const prod = state.products.find(p => (p.sku || '').toLowerCase() === sku.toLowerCase());
+      const prod = window.state.products.find(p => (p.sku || '').toLowerCase() === sku.toLowerCase());
       if (!prod) {
         showToast('No se encontró producto con SKU ' + sku);
         return;
@@ -432,26 +617,26 @@
     }
 
     function changeQty(idx, delta) {
-      const item = state.cart[idx];
+      const item = window.state.cart[idx];
       if (!item) return;
       item.qty += delta;
-      if (item.qty <= 0) state.cart.splice(idx, 1);
+      if (item.qty <= 0) window.state.cart.splice(idx, 1);
       renderCart();
     }
 
     function clearCart() {
-      state.cart = [];
+      window.state.cart = [];
       renderCart();
     }
 
     function checkoutSale() {
-      if (!state.cart.length) {
+      if (!window.state.cart.length) {
         showToast('El ticket está vacío');
         return;
       }
-      const total = state.cart.reduce((acc, i) => acc + i.price * i.qty, 0);
+      const total = window.state.cart.reduce((acc, i) => acc + i.price * i.qty, 0);
       const customerId = document.getElementById('posCustomer').value;
-      const customer = state.customers.find(c => c.id === customerId) || null;
+      const customer = window.state.customers.find(c => c.id === customerId) || null;
       const invoiceType = document.getElementById('posInvoiceType').value;
       const paymentMethod = document.getElementById('posPayment').value;
 
@@ -464,35 +649,45 @@
           showToast('Supera el límite de crédito del cliente');
           return;
         }
-        customer.balance += total;
+        customer.balance = Number((customer.balance + total).toFixed(2));
       }
 
-      state.cart.forEach(item => {
-        const prod = state.products.find(p => p.id === item.productId);
-        if (prod) prod.stock = Number((prod.stock - item.qty).toFixed(2));
+      const touchedProducts = [];
+      window.state.cart.forEach(item => {
+        const prod = window.state.products.find(p => p.id === item.productId);
+        if (prod) {
+          prod.stock = Number((prod.stock - item.qty).toFixed(2));
+          touchedProducts.push(prod);
+        }
       });
 
       const sale = {
         id: 'v_' + Date.now(),
         date: new Date().toLocaleString(),
+        customerId: customer ? customer.id : null,
         customerName: customer ? customer.name : 'Consumidor Final',
+        customerDoc: customer ? (customer.doc || '') : '',
         customerPhone: customer ? customer.phone : '',
         invoiceType,
         paymentMethod,
         total,
         arcaStatus: invoiceType === 'TICKET_X' ? 'NONE' : 'PENDING_ARCA',
-        items: [...state.cart]
+        items: [...window.state.cart]
       };
 
-      state.sales.unshift(sale);
-      state.cart = [];
-      persist();
+      window.state.sales.unshift(sale);
+      window.state.cart = [];
+      persist({
+        products: touchedProducts,
+        customers: customer ? [customer] : [],
+        sales: [sale]
+      });
       renderAll();
       showToast('Venta cobrada por $' + total.toFixed(2));
     }
 
     function registerPayment(custId) {
-      const cust = state.customers.find(c => c.id === custId);
+      const cust = window.state.customers.find(c => c.id === custId);
       if (!cust || cust.balance <= 0) {
         showToast('Sin saldo pendiente');
         return;
@@ -501,13 +696,13 @@
       const amount = parseFloat(amountStr);
       if (isNaN(amount) || amount <= 0) return;
       cust.balance = Math.max(0, Number((cust.balance - amount).toFixed(2)));
-      persist();
+      persist({ customers: [cust] });
       renderAll();
-      showToast('Cobro registrado');
+      showToast('Cobro registrado y sincronizado');
     }
 
     function sendWhatsapp(custId) {
-      const cust = state.customers.find(c => c.id === custId);
+      const cust = window.state.customers.find(c => c.id === custId);
       if (!cust) return;
       const text = encodeURIComponent(
         'Hola ' + cust.name + ', te informamos el saldo actual de tu Cuenta Corriente en StockPlus: $' + cust.balance.toFixed(2) + '.'
@@ -518,9 +713,9 @@
 
     function exportBackup() {
       const blob = new Blob([JSON.stringify({
-        products: state.products,
-        customers: state.customers,
-        sales: state.sales
+        products: window.state.products,
+        customers: window.state.customers,
+        sales: window.state.sales
       }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -530,7 +725,7 @@
 
     function renderPos() {
       const q = (document.getElementById('posSearch').value || '').toLowerCase();
-      const list = state.products.filter(p =>
+      const list = window.state.products.filter(p =>
         p.name.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q)
       );
       document.getElementById('posProducts').innerHTML = list.length
@@ -548,7 +743,7 @@
       const sel = document.getElementById('posCustomer');
       const prevVal = sel.value;
       sel.innerHTML = '<option value="">Consumidor Final</option>' +
-        state.customers.map(c => `<option value="${c.id}">${c.name} (Saldo: $${c.balance.toFixed(2)})</option>`).join('');
+        window.state.customers.map(c => `<option value="${c.id}">${c.name} (Saldo: $${Number(c.balance || 0).toFixed(2)})</option>`).join('');
       if (prevVal) sel.value = prevVal;
 
       renderCart();
@@ -556,12 +751,12 @@
 
     function renderCart() {
       const el = document.getElementById('cartItems');
-      if (!state.cart.length) {
+      if (!window.state.cart.length) {
         el.innerHTML = '<div class="muted">Sin ítems en el ticket</div>';
         document.getElementById('cartTotal').textContent = '$0.00';
         return;
       }
-      el.innerHTML = state.cart.map((item, idx) => `
+      el.innerHTML = window.state.cart.map((item, idx) => `
         <div class="list-item">
           <div>
             <div><strong>${item.name}</strong></div>
@@ -573,14 +768,14 @@
           </div>
         </div>
       `).join('');
-      const total = state.cart.reduce((acc, i) => acc + i.price * i.qty, 0);
+      const total = window.state.cart.reduce((acc, i) => acc + i.price * i.qty, 0);
       document.getElementById('cartTotal').textContent = '$' + total.toFixed(2);
     }
 
     function renderProducts() {
-      document.getElementById('prodCount').textContent = state.products.length;
-      document.getElementById('productsList').innerHTML = state.products.length
-        ? state.products.map(p => `
+      document.getElementById('prodCount').textContent = window.state.products.length;
+      document.getElementById('productsList').innerHTML = window.state.products.length
+        ? window.state.products.map(p => `
             <div class="list-item">
               <div>
                 <div><strong>${p.name}</strong></div>
@@ -593,12 +788,12 @@
     }
 
     function renderCustomers() {
-      document.getElementById('customersList').innerHTML = state.customers.length
-        ? state.customers.map(c => `
+      document.getElementById('customersList').innerHTML = window.state.customers.length
+        ? window.state.customers.map(c => `
             <div class="list-item">
               <div>
                 <div><strong>${c.name}</strong></div>
-                <div class="muted">Saldo: <strong>$${c.balance.toFixed(2)}</strong> • Límite: $${c.creditLimit.toFixed(2)}</div>
+                <div class="muted">Saldo: <strong>$${Number(c.balance || 0).toFixed(2)}</strong> • Límite: $${Number(c.creditLimit || 0).toFixed(2)}</div>
               </div>
               <div style="display:flex;gap:6px;">
                 <button type="button" class="green" onclick="registerPayment('${c.id}')">Cobrar</button>
@@ -610,12 +805,12 @@
     }
 
     function renderSales() {
-      document.getElementById('salesList').innerHTML = state.sales.length
-        ? state.sales.map(s => `
+      document.getElementById('salesList').innerHTML = window.state.sales.length
+        ? window.state.sales.map(s => `
             <div class="list-item">
               <div>
                 <div><strong>$${Number(s.total).toFixed(2)}</strong> • ${s.invoiceType} • ${s.paymentMethod}</div>
-                <div class="muted">${s.customerName} • ${s.date} • ARCA: ${s.arcaStatus}</div>
+                <div class="muted">${s.customerName} • ${s.date} • ARCA: ${s.arcaStatus}${s.cae ? ' • CAE ' + s.cae : ''}</div>
               </div>
             </div>
           `).join('')
@@ -629,7 +824,7 @@
       renderSales();
     }
 
-    updateNetBadge();
+    window.renderAll = renderAll;
     renderAll();
   </script>
 </body>
