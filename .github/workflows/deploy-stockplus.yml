@@ -1,0 +1,29 @@
+name: StockPlus Auto Deploy (GitHub + Firestore)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy Firestore Rules & Indexes (if present)
+        if: hashFiles('firestore.rules') != '' || hashFiles('firestore.indexes.json') != ''
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "${{ runner.temp }}/sa.json"
+          firebase deploy --only firestore --project stockplus-20xx --non-interactive
