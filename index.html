@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StockPlus POS &amp; ARCA — Offline-First</title>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --card: #111827;
+      --card-2: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --accent-2: #3b82f6;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding-bottom: 72px;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(17, 24, 39, 0.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand { font-weight: 700; font-size: 1.05rem; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: var(--card-2);
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .badge.ok { color: #86efac; border-color: #166534; }
+    .badge.off { color: #fcd34d; border-color: #92400e; }
+    main { max-width: 920px; margin: 0 auto; padding: 14px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 760px) { .grid-2 { grid-template-columns: 1.2fr 0.8fr; } }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    h2, h3 { margin: 0 0 10px; font-size: 1rem; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card-2);
+      color: var(--text);
+      margin-bottom: 10px;
+      font-size: 0.95rem;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .row > * { flex: 1; min-width: 120px; }
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      background: var(--accent-2);
+      color: #fff;
+    }
+    button.green { background: var(--accent); color: #052e16; }
+    button.warn { background: var(--warn); color: #1c1917; }
+    button.danger { background: var(--danger); color: #fff; }
+    button.ghost { background: var(--card-2); border: 1px solid var(--border); color: var(--text); }
+    .list-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 8px;
+      background: var(--card-2);
+      margin-bottom: 8px;
+    }
+    .muted { color: var(--muted); font-size: 0.8rem; }
+    .total { font-size: 1.25rem; font-weight: 800; color: #86efac; }
+    .toast {
+      position: fixed;
+      bottom: 68px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #0f172a;
+      border: 1px solid var(--accent);
+      color: var(--text);
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      z-index: 50;
+      display: none;
+      max-width: 92vw;
+    }
+    nav.bottom {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--card);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-around;
+      padding: 6px;
+      z-index: 30;
+    }
+    nav.bottom button {
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 6px;
+      font-size: 0.78rem;
+      flex: 1;
+    }
+    nav.bottom button.active {
+      background: var(--card-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="brand">StockPlus POS</div>
+      <div class="muted" id="syncInfo">LocalStorage listo</div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <span class="badge off" id="netBadge">Offline</span>
+      <button type="button" class="ghost" onclick="exportBackup()">JSON</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- TAB POS -->
+    <section id="tab-pos">
+      <div class="grid grid-2">
+        <div class="card">
+          <h2>Catálogo rápido (tocá para sumar)</h2>
+          <div class="row">
+            <input type="text" id="posSearch" placeholder="Buscar por nombre o SKU..." oninput="renderPos()" />
+            <input type="text" id="skuQuick" placeholder="Escanear / escribir SKU" onkeydown="if(event.key==='Enter') addBySku()" />
+            <button type="button" class="ghost" style="max-width:110px;margin-bottom:10px;" onclick="addBySku()">+ SKU</button>
+          </div>
+          <div id="posProducts"></div>
+        </div>
+
+        <div class="card">
+          <h2>Ticket de venta</h2>
+          <label>Cliente</label>
+          <select id="posCustomer"></select>
+
+          <div class="row">
+            <div>
+              <label>Comprobante</label>
+              <select id="posInvoiceType">
+                <option value="TICKET_X">Ticket X (Interno)</option>
+                <option value="FACTURA_B">Factura B (PENDING_ARCA)</option>
+                <option value="FACTURA_A">Factura A (PENDING_ARCA)</option>
+                <option value="FACTURA_C">Factura C (PENDING_ARCA)</option>
+              </select>
+            </div>
+            <div>
+              <label>Medio de pago</label>
+              <select id="posPayment">
+                <option value="EFECTIVO">Efectivo</option>
+                <option value="TRANSFERENCIA">Transferencia</option>
+                <option value="MP">Mercado Pago</option>
+                <option value="CTA_CTE">Cuenta Corriente</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="cartItems"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0;">
+            <span class="muted">Total a cobrar</span>
+            <span class="total" id="cartTotal">$0.00</span>
+          </div>
+          <div class="row">
+            <button type="button" class="green" onclick="checkoutSale()">Cobrar venta</button>
+            <button type="button" class="ghost" onclick="clearCart()">Limpiar</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB PRODUCTOS -->
+    <section id="tab-products" class="hidden">
+      <div class="grid grid-2">
+        <div class="card">
+          <h2>Nuevo / editar producto</h2>
+          <input type="hidden" id="prodId" />
+          <label>Nombre del producto *</label>
+          <input type="text" id="prodName" placeholder="Ej: Cable unipolar 2.5mm" />
+          <div class="row">
+            <div>
+              <label>SKU / Código de barras</label>
+              <input type="text" id="prodSku" placeholder="7790001" />
+            </div>
+            <div>
+              <label>Precio ARS *</label>
+              <input type="number" step="0.01" id="prodPrice" placeholder="1500" />
+            </div>
+            <div>
+              <label>Stock inicial</label>
+              <input type="number" step="0.01" id="prodStock" placeholder="10" />
+            </div>
+          </div>
+          <div class="row">
+            <button type="button" class="green" onclick="saveProduct()">Guardar producto</button>
+            <button type="button" class="ghost" onclick="resetProductForm()">Limpiar</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Productos cargados (<span id="prodCount">0</span>)</h2>
+          <div id="productsList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB CLIENTES / CTA CTE -->
+    <section id="tab-customers" class="hidden">
+      <div class="grid grid-2">
+        <div class="card">
+          <h2>Nuevo cliente / Cuenta Corriente</h2>
+          <label>Nombre o razón social *</label>
+          <input type="text" id="custName" placeholder="Ej: Juan Pérez" />
+          <div class="row">
+            <div>
+              <label>CUIT / DNI</label>
+              <input type="text" id="custDoc" placeholder="20-30111222-3" />
+            </div>
+            <div>
+              <label>WhatsApp (sin + ni espacios)</label>
+              <input type="text" id="custPhone" placeholder="5492964000000" />
+            </div>
+            <div>
+              <label>Límite Cta Cte ($)</label>
+              <input type="number" step="0.01" id="custLimit" placeholder="50000" />
+            </div>
+          </div>
+          <button type="button" class="green" onclick="saveCustomer()">Guardar cliente</button>
+        </div>
+
+        <div class="card">
+          <h2>Clientes y saldos</h2>
+          <div id="customersList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB VENTAS / ARCA -->
+    <section id="tab-sales" class="hidden">
+      <div class="card">
+        <h2>Ventas y estado ARCA</h2>
+        <div id="salesList"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <nav class="bottom">
+    <button type="button" class="active" id="nav-pos" onclick="switchTab('pos')">POS</button>
+    <button type="button" id="nav-products" onclick="switchTab('products')">Productos</button>
+    <button type="button" id="nav-customers" onclick="switchTab('customers')">Clientes</button>
+    <button type="button" id="nav-sales" onclick="switchTab('sales')">Ventas</button>
+  </nav>
+
+  <script>
+    const KEYS = {
+      products: 'sp_v2_products',
+      customers: 'sp_v2_customers',
+      sales: 'sp_v2_sales'
+    };
+
+    let state = {
+      products: JSON.parse(localStorage.getItem(KEYS.products) || '[]'),
+      customers: JSON.parse(localStorage.getItem(KEYS.customers) || '[]'),
+      sales: JSON.parse(localStorage.getItem(KEYS.sales) || '[]'),
+      cart: []
+    };
+
+    function persist() {
+      localStorage.setItem(KEYS.products, JSON.stringify(state.products));
+      localStorage.setItem(KEYS.customers, JSON.stringify(state.customers));
+      localStorage.setItem(KEYS.sales, JSON.stringify(state.sales));
+      document.getElementById('syncInfo').textContent =
+        'Guardado local ✓ • ' + new Date().toLocaleTimeString();
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.style.display = 'block';
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 2600);
+    }
+
+    function updateNetBadge() {
+      const badge = document.getElementById('netBadge');
+      if (navigator.onLine) {
+        badge.textContent = 'Online';
+        badge.className = 'badge ok';
+      } else {
+        badge.textContent = 'Offline';
+        badge.className = 'badge off';
+      }
+    }
+
+    window.addEventListener('online', updateNetBadge);
+    window.addEventListener('offline', updateNetBadge);
+
+    function switchTab(tab) {
+      ['pos', 'products', 'customers', 'sales'].forEach(t => {
+        document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab);
+        document.getElementById('nav-' + t).classList.toggle('active', t === tab);
+      });
+      renderAll();
+    }
+
+    function saveProduct() {
+      const id = document.getElementById('prodId').value || ('p_' + Date.now());
+      const name = document.getElementById('prodName').value.trim();
+      const sku = document.getElementById('prodSku').value.trim();
+      const price = parseFloat(document.getElementById('prodPrice').value);
+      const stock = parseFloat(document.getElementById('prodStock').value || '0');
+
+      if (!name || isNaN(price)) {
+        showToast('Completá nombre y precio válido');
+        return;
+      }
+
+      const item = { id, name, sku, price, stock: isNaN(stock) ? 0 : stock };
+      const idx = state.products.findIndex(p => p.id === id);
+      if (idx >= 0) state.products[idx] = item;
+      else state.products.unshift(item);
+
+      persist();
+      resetProductForm();
+      renderAll();
+      showToast('Producto guardado: ' + name);
+    }
+
+    function editProduct(id) {
+      const p = state.products.find(x => x.id === id);
+      if (!p) return;
+      document.getElementById('prodId').value = p.id;
+      document.getElementById('prodName').value = p.name;
+      document.getElementById('prodSku').value = p.sku || '';
+      document.getElementById('prodPrice').value = p.price;
+      document.getElementById('prodStock').value = p.stock;
+      switchTab('products');
+    }
+
+    function resetProductForm() {
+      ['prodId', 'prodName', 'prodSku', 'prodPrice', 'prodStock'].forEach(id => {
+        document.getElementById(id).value = '';
+      });
+    }
+
+    function saveCustomer() {
+      const name = document.getElementById('custName').value.trim();
+      const doc = document.getElementById('custDoc').value.trim();
+      const phone = document.getElementById('custPhone').value.replace(/\D/g, '');
+      const limit = parseFloat(document.getElementById('custLimit').value || '0');
+
+      if (!name) {
+        showToast('Ingresá el nombre del cliente');
+        return;
+      }
+
+      state.customers.unshift({
+        id: 'c_' + Date.now(),
+        name,
+        doc,
+        phone,
+        creditLimit: isNaN(limit) ? 0 : limit,
+        balance: 0
+      });
+
+      persist();
+      ['custName', 'custDoc', 'custPhone', 'custLimit'].forEach(id => {
+        document.getElementById(id).value = '';
+      });
+      renderAll();
+      showToast('Cliente guardado: ' + name);
+    }
+
+    function addToCart(prodId) {
+      const prod = state.products.find(p => p.id === prodId);
+      if (!prod) return;
+      const existing = state.cart.find(i => i.productId === prodId);
+      if (existing) existing.qty += 1;
+      else state.cart.push({ productId: prod.id, name: prod.name, price: prod.price, qty: 1 });
+      renderCart();
+    }
+
+    function addBySku() {
+      const sku = document.getElementById('skuQuick').value.trim();
+      if (!sku) return;
+      const prod = state.products.find(p => (p.sku || '').toLowerCase() === sku.toLowerCase());
+      if (!prod) {
+        showToast('No se encontró producto con SKU ' + sku);
+        return;
+      }
+      addToCart(prod.id);
+      document.getElementById('skuQuick').value = '';
+      showToast('Sumado: ' + prod.name);
+    }
+
+    function changeQty(idx, delta) {
+      const item = state.cart[idx];
+      if (!item) return;
+      item.qty += delta;
+      if (item.qty <= 0) state.cart.splice(idx, 1);
+      renderCart();
+    }
+
+    function clearCart() {
+      state.cart = [];
+      renderCart();
+    }
+
+    function checkoutSale() {
+      if (!state.cart.length) {
+        showToast('El ticket está vacío');
+        return;
+      }
+      const total = state.cart.reduce((acc, i) => acc + i.price * i.qty, 0);
+      const customerId = document.getElementById('posCustomer').value;
+      const customer = state.customers.find(c => c.id === customerId) || null;
+      const invoiceType = document.getElementById('posInvoiceType').value;
+      const paymentMethod = document.getElementById('posPayment').value;
+
+      if (paymentMethod === 'CTA_CTE') {
+        if (!customer) {
+          showToast('Seleccioná un cliente para Cuenta Corriente');
+          return;
+        }
+        if (customer.creditLimit > 0 && customer.balance + total > customer.creditLimit) {
+          showToast('Supera el límite de crédito del cliente');
+          return;
+        }
+        customer.balance += total;
+      }
+
+      state.cart.forEach(item => {
+        const prod = state.products.find(p => p.id === item.productId);
+        if (prod) prod.stock = Number((prod.stock - item.qty).toFixed(2));
+      });
+
+      const sale = {
+        id: 'v_' + Date.now(),
+        date: new Date().toLocaleString(),
+        customerName: customer ? customer.name : 'Consumidor Final',
+        customerPhone: customer ? customer.phone : '',
+        invoiceType,
+        paymentMethod,
+        total,
+        arcaStatus: invoiceType === 'TICKET_X' ? 'NONE' : 'PENDING_ARCA',
+        items: [...state.cart]
+      };
+
+      state.sales.unshift(sale);
+      state.cart = [];
+      persist();
+      renderAll();
+      showToast('Venta cobrada por $' + total.toFixed(2));
+    }
+
+    function registerPayment(custId) {
+      const cust = state.customers.find(c => c.id === custId);
+      if (!cust || cust.balance <= 0) {
+        showToast('Sin saldo pendiente');
+        return;
+      }
+      const amountStr = prompt('Monto a cobrar de ' + cust.name + ' (Saldo: $' + cust.balance.toFixed(2) + '):', cust.balance.toFixed(2));
+      const amount = parseFloat(amountStr);
+      if (isNaN(amount) || amount <= 0) return;
+      cust.balance = Math.max(0, Number((cust.balance - amount).toFixed(2)));
+      persist();
+      renderAll();
+      showToast('Cobro registrado');
+    }
+
+    function sendWhatsapp(custId) {
+      const cust = state.customers.find(c => c.id === custId);
+      if (!cust) return;
+      const text = encodeURIComponent(
+        'Hola ' + cust.name + ', te informamos el saldo actual de tu Cuenta Corriente en StockPlus: $' + cust.balance.toFixed(2) + '.'
+      );
+      const url = cust.phone ? ('https://wa.me/' + cust.phone + '?text=' + text) : ('https://wa.me/?text=' + text);
+      window.open(url, '_blank');
+    }
+
+    function exportBackup() {
+      const blob = new Blob([JSON.stringify({
+        products: state.products,
+        customers: state.customers,
+        sales: state.sales
+      }, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'stockplus-respaldo-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.click();
+    }
+
+    function renderPos() {
+      const q = (document.getElementById('posSearch').value || '').toLowerCase();
+      const list = state.products.filter(p =>
+        p.name.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q)
+      );
+      document.getElementById('posProducts').innerHTML = list.length
+        ? list.map(p => `
+            <div class="list-item" onclick="addToCart('${p.id}')" style="cursor:pointer;">
+              <div>
+                <div><strong>${p.name}</strong></div>
+                <div class="muted">SKU: ${p.sku || '-'} • Stock: ${p.stock}</div>
+              </div>
+              <strong>$${Number(p.price).toFixed(2)}</strong>
+            </div>
+          `).join('')
+        : '<div class="muted">Todavía no cargaste productos. Andá a la pestaña Productos para agregar el primero.</div>';
+
+      const sel = document.getElementById('posCustomer');
+      const prevVal = sel.value;
+      sel.innerHTML = '<option value="">Consumidor Final</option>' +
+        state.customers.map(c => `<option value="${c.id}">${c.name} (Saldo: $${c.balance.toFixed(2)})</option>`).join('');
+      if (prevVal) sel.value = prevVal;
+
+      renderCart();
+    }
+
+    function renderCart() {
+      const el = document.getElementById('cartItems');
+      if (!state.cart.length) {
+        el.innerHTML = '<div class="muted">Sin ítems en el ticket</div>';
+        document.getElementById('cartTotal').textContent = '$0.00';
+        return;
+      }
+      el.innerHTML = state.cart.map((item, idx) => `
+        <div class="list-item">
+          <div>
+            <div><strong>${item.name}</strong></div>
+            <div class="muted">${item.qty} x $${Number(item.price).toFixed(2)}</div>
+          </div>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <button type="button" class="ghost" onclick="changeQty(${idx}, -1)">-</button>
+            <button type="button" class="ghost" onclick="changeQty(${idx}, 1)">+</button>
+          </div>
+        </div>
+      `).join('');
+      const total = state.cart.reduce((acc, i) => acc + i.price * i.qty, 0);
+      document.getElementById('cartTotal').textContent = '$' + total.toFixed(2);
+    }
+
+    function renderProducts() {
+      document.getElementById('prodCount').textContent = state.products.length;
+      document.getElementById('productsList').innerHTML = state.products.length
+        ? state.products.map(p => `
+            <div class="list-item">
+              <div>
+                <div><strong>${p.name}</strong></div>
+                <div class="muted">SKU: ${p.sku || '-'} • Stock: ${p.stock} • $${Number(p.price).toFixed(2)}</div>
+              </div>
+              <button type="button" class="ghost" onclick="editProduct('${p.id}')">Editar</button>
+            </div>
+          `).join('')
+        : '<div class="muted">Sin productos cargados</div>';
+    }
+
+    function renderCustomers() {
+      document.getElementById('customersList').innerHTML = state.customers.length
+        ? state.customers.map(c => `
+            <div class="list-item">
+              <div>
+                <div><strong>${c.name}</strong></div>
+                <div class="muted">Saldo: <strong>$${c.balance.toFixed(2)}</strong> • Límite: $${c.creditLimit.toFixed(2)}</div>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="green" onclick="registerPayment('${c.id}')">Cobrar</button>
+                <button type="button" class="ghost" onclick="sendWhatsapp('${c.id}')">WA</button>
+              </div>
+            </div>
+          `).join('')
+        : '<div class="muted">Sin clientes cargados</div>';
+    }
+
+    function renderSales() {
+      document.getElementById('salesList').innerHTML = state.sales.length
+        ? state.sales.map(s => `
+            <div class="list-item">
+              <div>
+                <div><strong>$${Number(s.total).toFixed(2)}</strong> • ${s.invoiceType} • ${s.paymentMethod}</div>
+                <div class="muted">${s.customerName} • ${s.date} • ARCA: ${s.arcaStatus}</div>
+              </div>
+            </div>
+          `).join('')
+        : '<div class="muted">Todavía no hay ventas registradas</div>';
+    }
+
+    function renderAll() {
+      renderPos();
+      renderProducts();
+      renderCustomers();
+      renderSales();
+    }
+
+    updateNetBadge();
+    renderAll();
+  </script>
+</body>
+</html>
